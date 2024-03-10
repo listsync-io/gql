@@ -2,8 +2,9 @@ from setuptools import setup, find_packages
 
 setup(
     name="gql",
-    version="0.1",
+    version="1.0",
     packages=find_packages(),
+    package_dir={"": "."},
     install_requires=[
         "click",
         "GraphQL-core-next",
@@ -11,8 +12,12 @@ setup(
         "requests",
         "aiohttp",
     ],
+    entry_points={
+        "console_scripts": [
+            "gql = gql.cli:cli",
+        ],
+    },
     # Additional metadata
-    author="Your Name",
-    author_email="your.email@example.com",
-    description="Description of your package",
+    author="Lio",
+    author_email="lio@example.com",
 )
