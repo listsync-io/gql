@@ -1,0 +1,20 @@
+# python
+*.pyc
+*__pycache__
+.pytest_cache
+venv
+# environment
+.env
+.env.*
+!.env.testing
+# npm
+node_modules
+package-lock.json
+
+.vscode
+**/*.DS_Store
+
+# compiled assets
+storage/compiled
+.direnv
+.envrc

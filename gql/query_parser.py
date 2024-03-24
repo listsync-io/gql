@@ -1,6 +1,9 @@
 from typing import Any, List, Mapping, Union, cast
 from dataclasses import dataclass, field
 
+from graphql.language.ast import ListTypeNode, ListValueNode, ObjectValueNode
+
+
 from graphql import (
     GraphQLSchema,
     validate,
@@ -88,6 +91,20 @@ class FieldToTypeMatcherVisitor(Visitor):
     def current(self) -> ParsedObject:
         return self.dfs_path[-1]
 
+    def extract_default_value(self, value_node):
+        """Extracts the default value from a value node."""
+        if hasattr(value_node, "value"):  # Directly accessible value (scalar types)
+            return value_node.value
+        elif isinstance(value_node, ListValueNode):  # List values
+            return [self.extract_default_value(item) for item in value_node.values]
+        elif isinstance(value_node, ObjectValueNode):  # Object values
+            return {
+                field.name.value: self.extract_default_value(field.value)
+                for field in value_node.fields
+            }
+        # Add other types as needed
+        return None
+
     # Document
     def enter_operation_definition(self, node: OperationDefinitionNode, *_args):
         name, operation = node.name, node.operation
@@ -95,14 +112,17 @@ class FieldToTypeMatcherVisitor(Visitor):
         variables = []
         for var in node.variable_definitions:
             ptype, nullable, _ = self.__variable_type_to_python(var.type)
+            default_value = (
+                self.extract_default_value(var.default_value)
+                if var.default_value
+                else None
+            )
             variables.append(
                 ParsedVariableDefinition(
                     name=var.variable.name.value,
                     type=ptype,
                     nullable=nullable,
-                    default_value=(
-                        var.default_value.value if var.default_value else None
-                    ),
+                    default_value=default_value,
                 )
             )
 
@@ -198,9 +218,11 @@ class FieldToTypeMatcherVisitor(Visitor):
             "ID": "str",
             "String": "str",
             "Int": "int",
+            "bigint": "int",
             "Float": "float",
             "Boolean": "bool",
             "DateTime": "DateTime",
+            "timestamptz": "DateTime",
         }
 
         if isinstance(scalar, GraphQLList):
@@ -208,8 +230,8 @@ class FieldToTypeMatcherVisitor(Visitor):
             if isinstance(scalar, GraphQLNonNull):
                 scalar = scalar.of_type
                 nullable = False
-
-            mapping = f"List[{mapping.get(str(scalar), str(scalar))}]"
+            mapped_type = mapping.get(str(scalar), str(scalar))
+            mapping = f"List[{mapped_type}]"
         else:
             mapping = mapping.get(str(scalar), str(scalar))
 
@@ -218,10 +240,17 @@ class FieldToTypeMatcherVisitor(Visitor):
     @staticmethod
     def __variable_type_to_python(var_type: TypeNode):
         nullable = True
-        if isinstance(var_type, NonNullTypeNode):
-            nullable = False
-            var_type = var_type.type
+        original_var_type = var_type  # Keep the original type for mapping later
 
+        # Recursively navigate through NonNullTypeNode and ListTypeNode to find the NamedTypeNode
+        while isinstance(var_type, (NonNullTypeNode, ListTypeNode)):
+            if isinstance(var_type, NonNullTypeNode):
+                nullable = False
+                var_type = var_type.type  # Go one level deeper
+            elif isinstance(var_type, ListTypeNode):
+                var_type = var_type.type  # Go one level deeper
+
+        # Now, var_type should be a NamedTypeNode, and we can safely access its name
         mapping = {
             "ID": "str",
             "String": "str",
@@ -231,8 +260,13 @@ class FieldToTypeMatcherVisitor(Visitor):
             "DateTime": "DateTime",
         }
 
-        mapping = mapping.get(var_type.name.value, var_type.name.value)
-        return mapping, nullable, var_type
+        # Handle lists by checking the original_var_type
+        if isinstance(original_var_type, ListTypeNode):
+            type_str = f"List[{mapping.get(var_type.name.value, var_type.name.value)}]"
+        else:
+            type_str = mapping.get(var_type.name.value, var_type.name.value)
+
+        return type_str, nullable, var_type
 
 
 class AnonymousQueryError(Exception):

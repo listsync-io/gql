@@ -1,0 +1,16 @@
+setup.py
+./gql/cli.py
+./gql/config.py
+./gql/query_parser.py
+./gql/renderer_dataclasses.py
+./gql/utils_codegen.py
+./gql/utils_schema.py
+./gql/clients/__init__.py
+./gql/clients/asyncio.py
+./gql/clients/sync.py
+cfk_gql.egg-info/PKG-INFO
+cfk_gql.egg-info/SOURCES.txt
+cfk_gql.egg-info/dependency_links.txt
+cfk_gql.egg-info/entry_points.txt
+cfk_gql.egg-info/requires.txt
+cfk_gql.egg-info/top_level.txt

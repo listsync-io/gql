@@ -1,0 +1,2 @@
+[console_scripts]
+gql = gql.cli:cli

@@ -1,0 +1,11 @@
+Metadata-Version: 2.1
+Name: cfk_gql
+Version: 3.0
+Author: Lio
+Author-email: lio@example.com
+Requires-Dist: click
+Requires-Dist: GraphQL-core-next
+Requires-Dist: watchdog
+Requires-Dist: requests
+Requires-Dist: aiohttp
+Requires-Dist: dataclasses_json

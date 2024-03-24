@@ -1,9 +1,10 @@
-from setuptools import setup, find_packages
+from setuptools import setup
 
 setup(
-    name="gql",
-    version="1.0",
-    packages=find_packages(),
+    name="cfk_gql",
+    version="3.0",
+    packages=["gql", "gql.clients"],
+    package_data={"": ["*"]},
     package_dir={"": "."},
     install_requires=[
         "click",
@@ -11,6 +12,7 @@ setup(
         "watchdog",
         "requests",
         "aiohttp",
+        "dataclasses_json",
     ],
     entry_points={
         "console_scripts": [

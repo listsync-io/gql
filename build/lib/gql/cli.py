@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 import click
 import glob
+import subprocess
 import time
 import os
 from os.path import join as join_paths, isfile
@@ -97,7 +98,17 @@ def run(config_filename):
 
     for filename in filenames:
         process_file(filename, query_parser, query_renderer)
+        # Format the processed file using Black
+        format_with_black(filename)
 
+def format_with_black(filename):
+    """Format a Python file using Black."""
+    filename = filename.replace('.graphql', '.py')
+    try:
+        subprocess.run(['black', filename], check=True)
+        click.echo(f"Formatted {filename} with Black.")
+    except subprocess.CalledProcessError as e:
+        click.echo(f"Error formatting {filename} with Black: {e}")
 
 @cli.command()
 @click.option('-c', '--config', 'config_filename', default=DEFAULT_CONFIG_FNAME, type=click.Path(exists=True))
