@@ -34,6 +34,7 @@ class DataclassesRenderer:
         buffer.write("from gql.renderer_dataclasses import DataclassesRenderer")
         buffer.write("from app.facades import auth")
         buffer.write("from dateutil import parser")
+        buffer.write("from app.exceptions import CantProceed")
         buffer.write("")
 
         if self.config.custom_header:
@@ -81,8 +82,11 @@ class DataclassesRenderer:
         buffer.write("")
         buffer.write("from datetime import datetime")
         buffer.write("from marshmallow import fields as marshmallow_fields")
+
+        buffer.write("def custom_datetime_encoder(dt):")
+        buffer.write("    return dt.isoformat() if dt is not None else None")
         buffer.write(
-            "DATETIME_FIELD = field(metadata={'dataclasses_json': {'encoder': datetime.isoformat, 'decoder': parser.parse, 'mm_field': marshmallow_fields.DateTime(format='iso')}})"
+            "DATETIME_FIELD = field(metadata={'dataclasses_json': {'encoder': custom_datetime_encoder, 'decoder': parser.parse, 'mm_field': marshmallow_fields.DateTime(format='iso')}})"
         )
         buffer.write("")
 
@@ -235,6 +239,9 @@ class DataclassesRenderer:
                 )
                 buffer.write("data = cls.from_json(response_text).to_dict()")
 
+                buffer.write("if data.get('errors'):")
+                buffer.write("    raise CantProceed(data['errors'])")
+
                 buffer.write(
                     "operation_name = cls.__name__.replace('find', '').replace('get', '')"
                 )
@@ -246,7 +253,7 @@ class DataclassesRenderer:
                 )
 
                 buffer.write(
-                    "return DataclassesRenderer.relayify(data, snake_case_str) if auth.user().is_standard_call() else DataclassesRenderer.simplify(data, snake_case_str)"
+                    "return DataclassesRenderer.relayify(data, snake_case_str) if auth.is_standard_call() else DataclassesRenderer.simplify(data, snake_case_str)"
                 )
 
             buffer.write("")
@@ -262,6 +269,9 @@ class DataclassesRenderer:
                 )
                 buffer.write("data = cls.from_json(response_text).to_dict()")
 
+                buffer.write("if data.get('errors'):")
+                buffer.write("    raise CantProceed(data['errors'])")
+
                 buffer.write(
                     "operation_name = cls.__name__.replace('find', '').replace('get', '')"
                 )
@@ -273,7 +283,7 @@ class DataclassesRenderer:
                 )
 
                 buffer.write(
-                    "return DataclassesRenderer.relayify(data, snake_case_str) if auth.user().is_standard_call() else DataclassesRenderer.simplify(data, snake_case_str)"
+                    "return DataclassesRenderer.relayify(data, snake_case_str) if auth.is_standard_call() else DataclassesRenderer.simplify(data, snake_case_str)"
                 )
 
             buffer.write("")
