@@ -177,8 +177,11 @@ class DataclassesRenderer:
                     }
                     for index, item in enumerate(data.get(item_key, []), start=1)
                 ]
-                relay_response["edges"] = edges
-                return relay_response
+            else:
+                edges = []
+
+            relay_response["edges"] = edges
+            return relay_response
 
         if f"{item_key}_by_pk" in data:
             data = {**data, **data[f"{item_key}_by_pk"]}
@@ -231,7 +234,9 @@ class DataclassesRenderer:
             with buffer.write_block(
                 f"def execute(cls, {vars_args_str}on_before_callback: Callable[[Mapping[str, str], Mapping[str, str]], None] = None):"
             ):
-                buffer.write(f"client = Client('{self.config.endpoint}')")
+                buffer.write(
+                    f"client = Client('{self.config.endpoint}', auth.user().get_hasura_header())"
+                )
                 variables_dict_str = ", ".join(variables_dict_lines)
                 buffer.write(f"variables = {{{variables_dict_str}}}")
                 buffer.write(
@@ -262,7 +267,9 @@ class DataclassesRenderer:
             with buffer.write_block(
                 f"async def execute_async(cls, {vars_args_str}on_before_callback: Callable[[Mapping[str, str], Mapping[str, str]], None] = None):"
             ):
-                buffer.write(f"client = AsyncIOClient('{self.config.endpoint}')")
+                buffer.write(
+                    f"client = AsyncIOClient('{self.config.endpoint}', auth.user().get_hasura_header())"
+                )
                 buffer.write(f"variables = {{{variables_dict_str}}}")
                 buffer.write(
                     "response_text = await client.call(cls.__QUERY__, variables=variables, on_before_callback=on_before_callback)"
