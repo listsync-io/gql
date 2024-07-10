@@ -253,7 +253,7 @@ class DataclassesRenderer:
                 )
 
                 buffer.write(
-                    "return DataclassesRenderer.relayify(data, snake_case_str) if auth.is_standard_call() else DataclassesRenderer.simplify(data, snake_case_str)"
+                    "return DataclassesRenderer.relayify(data, snake_case_str) if auth.is_user_call() else DataclassesRenderer.simplify(data, snake_case_str)"
                 )
 
             buffer.write("")
@@ -283,7 +283,7 @@ class DataclassesRenderer:
                 )
 
                 buffer.write(
-                    "return DataclassesRenderer.relayify(data, snake_case_str) if auth.is_standard_call() else DataclassesRenderer.simplify(data, snake_case_str)"
+                    "return DataclassesRenderer.relayify(data, snake_case_str) if auth.is_user_call() else DataclassesRenderer.simplify(data, snake_case_str)"
                 )
 
             buffer.write("")
