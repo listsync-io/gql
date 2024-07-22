@@ -4,8 +4,9 @@ import glob
 import subprocess
 import time
 import os
-from os.path import join as join_paths, isfile
+from os.path import join as join_paths, isfile, dirname, basename, splitext
 
+from collections import defaultdict
 from graphql import GraphQLSchema
 from watchdog.observers import Observer
 from watchdog.events import (
@@ -73,28 +74,81 @@ def init(schema, endpoint, root, config_filename):
     )
 
 
-def process_file(filename: str, parser: QueryParser, renderer: DataclassesRenderer):
-    root, _s = os.path.splitext(filename)
-    target_filename = root + ".py"
+def process_files_with_same_domain(
+    filenames: list, parser: QueryParser, renderer: DataclassesRenderer
+):
+    grouped_files = defaultdict(list)
+    for filename in filenames:
+        directory = dirname(filename)
+        base_name = basename(filename)
+        domain_name = base_name.split(".")[0]
+        grouped_files[(directory, domain_name)].append(filename)
 
-    click.echo(f"Parsing {filename} ... ", nl=False)
-    with open(filename, "r") as fin:
-        query = fin.read()
-        try:
-            parsed = parser.parse(query)
-            rendered = renderer.render(parsed)
-            with open(target_filename, "w") as outfile:
-                outfile.write(rendered)
+    class_names = []
+    for (directory, domain_name), files in grouped_files.items():
+        class_name = process_files_in_directory(
+            directory, domain_name, files, parser, renderer
+        )
+        class_names.append(class_name)
+
+    # Create __init__.py in each directory
+    directories = set(directory for directory, _ in grouped_files.keys())
+    for directory in directories:
+        create_init_file(directory, class_names)
+
+
+def process_files_in_directory(
+    directory: str,
+    domain_name: str,
+    filenames: list,
+    parser: QueryParser,
+    renderer: DataclassesRenderer,
+):
+    buffer = []
+    class_name = (
+        f"{dirname(directory).split('/')[-1].capitalize()}{domain_name.capitalize()}"
+    )
+    output_file = join_paths(directory, f"{class_name}.py")
+
+    buffer.append(renderer.render_shared_code())
+    buffer.append(f"\n\nclass {class_name}:\n")
+
+    for filename in filenames:
+        click.echo(f"Parsing {filename} ... ", nl=False)
+        with open(filename, "r") as fin:
+            query = fin.read()
+            try:
+                parsed = parser.parse(query)
+                rendered = renderer.render(parsed, basename(filename).split(".")[1])
+                buffer.append(f"    # From {basename(filename)}\n")
+                buffer.append("    " + rendered.replace("\n", "\n    "))
+                buffer.append("\n")
                 click.secho("Success!", fg="bright_white")
+            except AnonymousQueryError:
+                click.secho("Failed!", fg="bright_red")
+                click.secho("\tQuery is missing a name", fg="bright_black")
+            except InvalidQueryError as invalid_err:
+                click.secho("Failed!", fg="bright_red")
+                click.secho(f"\t{invalid_err}", fg="bright_black")
 
-        except AnonymousQueryError:
-            click.secho("Failed!", fg="bright_red")
-            click.secho("\tQuery is missing a name", fg="bright_black")
-            safe_remove(target_filename)
-        except InvalidQueryError as invalid_err:
-            click.secho("Failed!", fg="bright_red")
-            click.secho(f"\t{invalid_err}", fg="bright_black")
-            safe_remove(target_filename)
+    if len(buffer) > 2:  # If there are valid parsed contents
+        # Write all rendered content to the output file
+        with open(output_file, "w") as outfile:
+            for chunk in buffer:
+                outfile.write(chunk)
+                outfile.write("\n")
+
+        # Format the output file using Black
+        format_with_black(output_file)
+
+    return class_name
+
+
+def create_init_file(directory: str, class_names: list):
+    init_file_path = join_paths(directory, "__init__.py")
+    with open(init_file_path, "w") as init_file:
+        for class_name in class_names:
+            init_file.write(f"from .{class_name} import {class_name}\n")
 
 
 @cli.command()
@@ -117,15 +171,11 @@ def run(config_filename):
     query_parser = QueryParser(schema)
     query_renderer = DataclassesRenderer(schema, config)
 
-    for filename in filenames:
-        process_file(filename, query_parser, query_renderer)
-        # Format the processed file using Black
-        format_with_black(filename)
+    process_files_with_same_domain(filenames, query_parser, query_renderer)
 
 
 def format_with_black(filename):
     """Format a Python file using Black."""
-    filename = filename.replace(".graphql", ".py")
     try:
         subprocess.run(["black", filename], check=True)
         click.echo(f"Formatted {filename} with Black.")
@@ -159,8 +209,7 @@ def watch(config_filename):
                 if event.src_path not in filenames:
                     return
 
-                # Take any action here when a file is first created.
-                process_file(event.src_path, self.parser, self.renderer)
+                process_files_with_same_domain(filenames, self.parser, self.renderer)
 
     if not isfile(config_filename):
         click.echo(f"Could not find configuration file {config_filename}")
