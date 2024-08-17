@@ -1,9 +1,13 @@
 #!/usr/bin/env python
+import textwrap
 import click
 import glob
 import subprocess
 import time
 import os
+import pluralizer
+import re
+
 from os.path import join as join_paths, isfile, dirname, basename, splitext
 
 from collections import defaultdict
@@ -14,6 +18,7 @@ from watchdog.events import (
     EVENT_TYPE_CREATED,
     EVENT_TYPE_MODIFIED,
 )
+from gql.utils_codegen import CodeChunk
 
 from gql.config import Config
 from gql.query_parser import QueryParser, AnonymousQueryError, InvalidQueryError
@@ -64,7 +69,9 @@ def init(schema, endpoint, root, config_filename):
         endpoint = schema
 
     config = Config(
-        schema=schema, endpoint=endpoint, documents=join_paths(root, "**/*.graphql")
+        schema=schema,
+        endpoint=endpoint,
+        documents=join_paths("queries", "**/*.graphql"),
     )
 
     config.save(config_filename)
@@ -77,78 +84,111 @@ def init(schema, endpoint, root, config_filename):
 def process_files_with_same_domain(
     filenames: list, parser: QueryParser, renderer: DataclassesRenderer
 ):
-    grouped_files = defaultdict(list)
+    grouped_files = {}
     for filename in filenames:
-        directory = dirname(filename)
-        base_name = basename(filename)
-        domain_name = base_name.split(".")[0]
-        grouped_files[(directory, domain_name)].append(filename)
+        parts = filename.split("/")
 
-    class_names = []
-    for (directory, domain_name), files in grouped_files.items():
-        class_name = process_files_in_directory(
-            directory, domain_name, files, parser, renderer
+        del parts[0]
+
+        name_of_the_file = parts[-1]
+        app_or_package = parts[0]
+
+        name_of_the_model = ""
+        if app_or_package == "app":
+            name_of_the_model = parts[2]
+        elif app_or_package == "packages":
+            name_of_the_model = parts[3]
+
+        if name_of_the_model not in grouped_files:
+            grouped_files[name_of_the_model] = []
+
+        grouped_files[name_of_the_model].append(
+            {
+                "full_path": filename,
+                "name_of_the_file": name_of_the_file,
+                "app_or_package": app_or_package,
+                "name_of_the_model": name_of_the_model,
+            }
         )
-        class_names.append(class_name)
 
-    # Create __init__.py in each directory
-    directories = set(directory for directory, _ in grouped_files.keys())
-    for directory in directories:
-        create_init_file(directory, class_names)
+    for key, models in grouped_files.items():
+        for item in models:
+            process_files_in_directory(
+                full_path=item["full_path"],
+                name_of_the_file=item["name_of_the_file"],
+                app_or_package=item["app_or_package"],
+                name_of_the_model=item["name_of_the_model"],
+                parser=parser,
+                renderer=renderer,
+            )
+
+    # for _, obj in class_names.items():
+    #     create_init_file(
+    #         directory=obj[0]["start_path"],
+    #         data=obj,
+    #     )
+
+
+def create_init_file(directory: str, data: list):
+    init_file_path = f"{directory}/__init__.py"
+
+    with open(init_file_path, "w") as init_file:
+        for item in data:
+            init_file.write(
+                f"from .resolvers.{item['class_name']} import {item['class_name']}\n"
+            )
 
 
 def process_files_in_directory(
-    directory: str,
-    domain_name: str,
-    filenames: list,
+    full_path: str,
+    name_of_the_file: str,
+    app_or_package: str,
+    name_of_the_model: str,
     parser: QueryParser,
     renderer: DataclassesRenderer,
 ):
-    buffer = []
-    class_name = (
-        f"{dirname(directory).split('/')[-1].capitalize()}{domain_name.capitalize()}"
-    )
-    output_file = join_paths(directory, f"{class_name}.py")
+    bare_file_name = "_".join(name_of_the_file.split(".")[:-1])
+    verb = name_of_the_file.split(".")[1]
+    domain_name = re.sub(r"(?<!^)(?=[A-Z])", "_", name_of_the_model).lower()
 
-    buffer.append(renderer.render_shared_code())
-    buffer.append(f"\n\nclass {class_name}:\n")
+    start_path = os.path.normpath(os.path.join(full_path, "../.."))
+    output_file = f"{start_path}/executor/{bare_file_name}.py"
 
-    for filename in filenames:
-        click.echo(f"Parsing {filename} ... ", nl=False)
-        with open(filename, "r") as fin:
-            query = fin.read()
-            try:
-                parsed = parser.parse(query)
-                rendered = renderer.render(parsed, basename(filename).split(".")[1])
-                buffer.append(f"    # From {basename(filename)}\n")
-                buffer.append("    " + rendered.replace("\n", "\n    "))
-                buffer.append("\n")
-                click.secho("Success!", fg="bright_white")
-            except AnonymousQueryError:
-                click.secho("Failed!", fg="bright_red")
-                click.secho("\tQuery is missing a name", fg="bright_black")
-            except InvalidQueryError as invalid_err:
-                click.secho("Failed!", fg="bright_red")
-                click.secho(f"\t{invalid_err}", fg="bright_black")
+    buffer = CodeChunk()
+    buffer.write(renderer.render_shared_code())
 
-    if len(buffer) > 2:  # If there are valid parsed contents
-        # Write all rendered content to the output file
+    click.echo(f"Parsing {full_path} ... ", nl=False)
+
+    with open(full_path, "r") as fin:
+        query = fin.read()
+        try:
+            parsed = parser.parse(query)
+            rendered = renderer.render(parsed, full_path)
+
+            with buffer.write_block(
+                "def {}_{}(response_json: dict):".format(verb, domain_name)
+            ):
+                buffer.write("return {}".format(verb))
+
+            buffer.write(f"class {verb}(ModelHelper):")
+            buffer.write("    " + rendered.replace("\n", "\n    "))
+            click.secho("Success!", fg="bright_white")
+        except AnonymousQueryError:
+            click.secho("Failed!", fg="bright_red")
+            click.secho("\tQuery is missing a name", fg="bright_black")
+        except InvalidQueryError as invalid_err:
+            click.secho("Failed!", fg="bright_red")
+            click.secho(f"\t{invalid_err}", fg="bright_black")
+
+    if len(buffer.lines) > 2:
+        os.makedirs(dirname(output_file), exist_ok=True)
         with open(output_file, "w") as outfile:
-            for chunk in buffer:
+            for chunk in buffer.lines:
                 outfile.write(chunk)
                 outfile.write("\n")
 
         # Format the output file using Black
         format_with_black(output_file)
-
-    return class_name
-
-
-def create_init_file(directory: str, class_names: list):
-    init_file_path = join_paths(directory, "__init__.py")
-    with open(init_file_path, "w") as init_file:
-        for class_name in class_names:
-            init_file.write(f"from .{class_name} import {class_name}\n")
 
 
 @cli.command()
