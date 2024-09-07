@@ -39,7 +39,7 @@ class DataclassesRenderer:
                     from dateutil import parser
                     from datetime import datetime
                     from marshmallow import fields as marshmallow_fields
-                    from app.klasses import Executor, ModelHelper
+                    from app.klasses import Executor
                     
                     def datetime_encoder(dt: datetime) -> str:
                         return dt.isoformat() if dt else None
@@ -52,7 +52,7 @@ class DataclassesRenderer:
 
         return str(buffer)
 
-    def render(self, parsed_query: ParsedQuery, full_path: str):
+    def render(self, parsed_query: ParsedQuery, full_path: str, verb: str):
         buffer = CodeChunk()
 
         sorted_objects = sorted(
@@ -60,24 +60,52 @@ class DataclassesRenderer:
             key=lambda obj: 1 if isinstance(obj, ParsedOperation) else 0,
         )
 
+        def reorder_objects(obj):
+            result = []
+
+            # Recursive function to traverse and reorder the objects
+            def traverse(node):
+                for child in node.children:
+                    traverse(child)
+                # Create a copy of the object without the 'children' attribute
+                obj_without_children = type(node)(
+                    **{k: v for k, v in node.__dict__.items() if k != "children"}
+                )
+                result.append(obj_without_children)
+
+            traverse(obj)
+            return result
+
+        sorted_objects = self.ensure_unique_names_and_types(sorted_objects)
+
+        # if verb == "replace":
+        #     import pdb; pdb.set_trace()
+
         for obj in sorted_objects:
             if isinstance(obj, ParsedObject):
                 output = self.render_object(obj)
             elif isinstance(obj, ParsedOperation):
-                parsed_op = self.ensure_unique_names_and_types(obj)
+                ordered_objects = []
+                for child in obj.children:
+                    ordered_objects.extend(reorder_objects(child))
+
+                obj.children = ordered_objects
+                uppermost_query_name = ordered_objects[-1].fields[0].name
 
                 output = self.render_operation(
-                    operation_variables=parsed_op.variables,
-                    children_ops=parsed_op.children,
-                    query_name=parsed_op.name,
+                    operation_variables=obj.variables,
+                    children_ops=obj.children,
+                    query_name=obj.name,
                     query_string=dedent(parsed_query.query),
+                    verb=verb,
+                    uppermost_query_name=uppermost_query_name,
                 )
 
             buffer.write(output)
 
         return str(buffer)
 
-    def render_object(self, obj: ParsedObject):
+    def render_object(self, obj: ParsedObject, verb: str):
         buffer = CodeChunk()
 
         buffer.write("@dataclass_json")
@@ -91,11 +119,11 @@ class DataclassesRenderer:
 
         with buffer.write_block(f"class {obj.name}:"):
             for field in sorted_fields:
-                buffer.write(self.render_field(field))
+                buffer.write(self.render_field(field, verb))
 
         # render child objects
         for child_object in obj.children:
-            buffer.write(self.render_object(child_object))
+            buffer.write(self.render_object(child_object, verb))
 
         # pass if not children or fields
         if not (obj.children or obj.fields):
@@ -109,10 +137,16 @@ class DataclassesRenderer:
         children_ops: Optional[List[ParsedOperation]],
         query_name: str,
         query_string: str,
+        verb: str,
+        uppermost_query_name: str,
     ):
         buffer = CodeChunk()
 
         class_name = query_name
+
+        # Render children
+        for child_object in children_ops:
+            buffer.write(self.render_object(child_object, verb))
 
         buffer.write("@dataclass_json")
         buffer.write("@dataclass")
@@ -133,91 +167,136 @@ class DataclassesRenderer:
             variables_dict_str = ", ".join(variables_dict_lines)
             buffer.write(f"__PARAMS__ = [{variables_dict_str}]")
 
-            # query_name = parsed_query.objects[0].name
+            # anan = query_name.replace("find", "").replace("get", "")
+            # singular_str = anan[:-1] if anan.endswith("s") else anan
+            # snake_case_str = re.sub(r"(?<!^)(?=[A-Z])", "_", singular_str).lower()
 
-            anan = query_name.replace("find", "").replace("get", "")
-            singular_str = anan[:-1] if anan.endswith("s") else anan
-            snake_case_str = re.sub(r"(?<!^)(?=[A-Z])", "_", singular_str).lower()
-
-            buffer.write(f"__KEY__ = '{snake_case_str}'")
+            buffer.write(f"__KEY__ = '{uppermost_query_name}'")
 
         with buffer.write_block(""):
-            buffer.write(f"data: {query_name}Data = None")
+            buffer.write(f"data: Optional['{verb}.{query_name}Data'] = None")
             buffer.write("errors: Any = None")
-
-        # Render children
-        for child_object in children_ops:
-            buffer.write(self.render_object(child_object))
 
         return str(buffer)
 
     @staticmethod
-    def render_field(field: ParsedField):
+    def render_field(field: ParsedField, verb: str):
+        def render_json_type(field_type: str) -> str:
+            """Transforms JSON type fields to Dict."""
+            return "Dict" if field_type == "json" else field_type
+
+        def handle_nullable_field(field: ParsedField) -> (str, bool):
+            """Handles nullable fields by setting the appropriate suffix and optionality."""
+            is_optional = False
+            suffix = ""
+            if field.nullable:
+                if field.name != "organization":
+                    is_optional = True
+                    suffix = f"= {field.default_value}"
+            return suffix, is_optional
+
+        def handle_datetime_type(field_type: str) -> (str, str, bool):
+            """Handles DateTime type fields by setting the appropriate suffix and type."""
+            is_optional = False
+            suffix = ""
+            if field_type == "DateTime":
+                is_optional = True
+                suffix = """= field(
+                    default=None,
+                    metadata=config(
+                        encoder=datetime_encoder,
+                        decoder=datetime_decoder,
+                        mm_field=marshmallow_fields.DateTime(format="iso"),
+                    ),
+                )"""
+                field_type = "datetime"
+            return suffix, field_type, is_optional
+
+        def handle_numeric_type(field_type: str) -> str:
+            """Transforms numeric type fields to float."""
+            return "float" if field_type == "numeric" else field_type
+
+        def extract_keyword_and_inside_brackets(text: str):
+            # Use regex to find a keyword and content inside brackets
+            match = re.search(r"(\w+)\[(.*?)\]", text)
+            if match:
+                return match.group(1), match.group(
+                    2
+                )  # Return the keyword and the content inside brackets
+            return None
+
         suffix = ""
         field_type = field.type
 
-        if field_type == "json":
-            field_type = "Dict"
+        # Call transformation methods
+        field_type = render_json_type(field_type)
+        suffix, is_optional = handle_nullable_field(field)
+        suffix, field_type, is_optional = handle_datetime_type(field_type)
+        field_type = handle_numeric_type(field_type)
 
-        is_optional = False
-        # something fucked up - cemre
-        if field.nullable:
-            # bu böyle olmalı yoksa parse etmiyor dict gibi kullanılıyor.
-            if field.name == "organization":
-                suffix = ""
+        # Check if no transformation was applied
+        if field_type == field.type and field_type not in ["str", "int", "bool"]:
+            if "[" in field_type:
+                sub_parts = extract_keyword_and_inside_brackets(field_type)
+                field_type = f"{sub_parts[0]}['{verb}.{sub_parts[1]}']"
             else:
-                is_optional = True
-                suffix = f"= {field.default_value}"
+                field_type = f"'{verb}.{field_type}'"
 
-        if field_type == "DateTime":
-            is_optional = True
-            suffix = """= field(
-                default=None,
-                metadata=config(
-                    encoder=datetime_encoder,
-                    decoder=datetime_decoder,
-                    mm_field=marshmallow_fields.DateTime(format="iso"),
-                ),
-            )"""
-            field_type = "datetime"
-
-        if field_type == "numeric":
-            field_type = "float"
-
+        # Determine if the field type is optional
         if is_optional:
             field_type = f"Optional[{field_type}]"
 
         return f"{field.name}: {field_type} {suffix}"
 
-    def ensure_unique_names_and_types(self, operation):
+    def ensure_unique_names_and_types(self, objects):
         name_count = {}
         type_count = {}
 
         def unique_name(name, count_dict):
-            if "_response" not in name:
-                return name
-
-            if name in count_dict:
-                count_dict[name] += 1
-                return f"{name}_{count_dict[name]}"
+            # Handle nested types like List[amazon_product_image]
+            nested_type_match = re.match(r"(.*)\[(.*)\]", name)
+            if nested_type_match:
+                outer_type, inner_type = nested_type_match.groups()
+                # Recursively apply unique_name to the inner type
+                unique_inner_type = unique_name(inner_type, count_dict)
+                return f"{outer_type}[{unique_inner_type}]"
             else:
-                count_dict[name] = 0
-                return name
+                # Standard unique naming logic for non-nested types
+                if name in count_dict:
+                    count_dict[name] += 1
+                    return f"{name}_{count_dict[name]}"
+                else:
+                    count_dict[name] = 1
+                    return name
 
         def process_object(parsed_object):
             # Ensure the name of the ParsedObject is unique
-            parsed_object.name = unique_name(parsed_object.name, name_count)
+            unique_obj_name = unique_name(parsed_object.name, name_count)
+            if parsed_object.name != unique_obj_name:
+                print(f"Renaming object {parsed_object.name} to {unique_obj_name}")
+                parsed_object.name = unique_obj_name
 
             # Process each field to ensure the type is unique
-            for field in parsed_object.fields:
-                field.type = unique_name(field.type, type_count)
+            if hasattr(parsed_object, "fields"):
+                for field in parsed_object.fields:
+                    if field.type in [
+                        "str",
+                        "int",
+                        "bool",
+                        "date",
+                        "datetime",
+                        "DateTime",
+                        "numeric",
+                    ]:
+                        continue
+                    field.type = unique_name(field.type, type_count)
 
             # Recursively process any children objects
             for child in parsed_object.children:
                 process_object(child)
 
-        # Start processing from the root object
-        for child in operation.children:
-            process_object(child)
+        # Process all objects, including ParsedOperation and ParsedObject
+        for obj in objects:
+            process_object(obj)
 
-        return operation
+        return objects

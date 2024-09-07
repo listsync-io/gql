@@ -84,7 +84,16 @@ def init(schema, endpoint, root, config_filename):
 def process_files_with_same_domain(
     filenames: list, parser: QueryParser, renderer: DataclassesRenderer
 ):
-    grouped_files = {}
+    def to_snake_case(camel_case_string):
+        # Use regular expression to identify capital letters and add underscores before them
+        snake_case_string = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", camel_case_string)
+        # Convert the entire string to lowercase
+        return snake_case_string.lower()
+
+    grouped_files = {
+        "app": {},
+        "packages": {},
+    }
     for filename in filenames:
         parts = filename.split("/")
 
@@ -97,46 +106,129 @@ def process_files_with_same_domain(
         if app_or_package == "app":
             name_of_the_model = parts[2]
         elif app_or_package == "packages":
-            name_of_the_model = parts[3]
+            name_of_the_model = parts[1]
 
-        if name_of_the_model not in grouped_files:
-            grouped_files[name_of_the_model] = []
+        if name_of_the_model not in grouped_files[app_or_package]:
+            grouped_files[app_or_package][name_of_the_model] = []
 
-        grouped_files[name_of_the_model].append(
+        grouped_files[app_or_package][name_of_the_model].append(
             {
                 "full_path": filename,
                 "name_of_the_file": name_of_the_file,
+                "name_of_the_function": to_snake_case(
+                    name_of_the_file.split(".graphql")[0]
+                ),
                 "app_or_package": app_or_package,
                 "name_of_the_model": name_of_the_model,
             }
         )
 
-    for key, models in grouped_files.items():
+    packages_data = {}
+    for key, items in grouped_files["packages"].items():
+        for item in items:
+            needle = item["full_path"].split("/")[4]
+
+            if needle not in packages_data:
+                packages_data[needle] = []
+
+            packages_data[needle].append(item)
+        grouped_files["packages"][key] = packages_data
+
+    gathered_data = {}
+
+    for key, models in grouped_files["app"].items():
         for item in models:
-            process_files_in_directory(
+            filename, function = process_files_in_directory(
                 full_path=item["full_path"],
                 name_of_the_file=item["name_of_the_file"],
                 app_or_package=item["app_or_package"],
+                name_of_the_function=item["name_of_the_function"],
                 name_of_the_model=item["name_of_the_model"],
                 parser=parser,
                 renderer=renderer,
             )
 
-    # for _, obj in class_names.items():
-    #     create_init_file(
-    #         directory=obj[0]["start_path"],
-    #         data=obj,
-    #     )
+            if key not in gathered_data:
+                gathered_data[key] = {
+                    "domain_type": "app",
+                    "path": os.path.normpath(os.path.join(item["full_path"], "../..")),
+                    "functions": [],
+                }
 
-
-def create_init_file(directory: str, data: list):
-    init_file_path = f"{directory}/__init__.py"
-
-    with open(init_file_path, "w") as init_file:
-        for item in data:
-            init_file.write(
-                f"from .resolvers.{item['class_name']} import {item['class_name']}\n"
+            gathered_data[key]["functions"].append(
+                {
+                    "filename": filename,
+                    "function": function,
+                }
             )
+
+    for parent_name, boks in grouped_files["packages"].items():
+        for key, items in boks.items():
+            for item in items:
+                filename, function = process_files_in_directory(
+                    full_path=item["full_path"],
+                    name_of_the_file=item["name_of_the_file"],
+                    app_or_package=item["app_or_package"],
+                    name_of_the_function=item["name_of_the_function"],
+                    name_of_the_model=item["name_of_the_model"],
+                    parser=parser,
+                    renderer=renderer,
+                )
+
+                if parent_name + key not in gathered_data:
+                    gathered_data[parent_name + key] = {
+                        "domain_type": "packages",
+                        "actual_name": key,
+                        "path": os.path.normpath(
+                            os.path.join(item["full_path"], "../..")
+                        ),
+                        "functions": [],
+                    }
+
+                gathered_data[parent_name + key]["functions"].append(
+                    {
+                        "filename": filename,
+                        "function": function,
+                    }
+                )
+
+    for name_of_the_model, item in gathered_data.items():
+        create_init_file(
+            name_of_the_model=name_of_the_model,
+            directory=item["path"],
+            functions=item["functions"],
+            domain_type=item["domain_type"],
+            actual_name=item.get("actual_name", None),
+        )
+
+
+def create_init_file(
+    name_of_the_model: str,
+    directory: str,
+    functions: list,
+    domain_type: str,
+    actual_name: str = None,
+):
+    init_file_path = os.path.join(directory, "__init__.py")
+
+    # List all files in the directory
+    files_in_directory = os.listdir(directory)
+
+    # Create or overwrite the __init__.py file
+    with open(init_file_path, "w") as init_file:
+        init_file.write("# pyright: reportUnusedImport=false\n")
+
+        # Include additional functions specified in the functions list
+        for item in functions:
+            init_file.write(
+                f"from .executor.{item['filename']} import {item['function']}\n"
+            )
+
+        # Automatically include files at the same level
+        for file_name in files_in_directory:
+            if file_name.endswith(".py") and file_name != "__init__.py":
+                class_name = os.path.splitext(file_name)[0]
+                init_file.write(f"from .{class_name} import {class_name}\n")
 
 
 def process_files_in_directory(
@@ -144,11 +236,13 @@ def process_files_in_directory(
     name_of_the_file: str,
     app_or_package: str,
     name_of_the_model: str,
+    name_of_the_function: str,
     parser: QueryParser,
     renderer: DataclassesRenderer,
 ):
     bare_file_name = "_".join(name_of_the_file.split(".")[:-1])
-    verb = name_of_the_file.split(".")[1]
+    verb = name_of_the_function.split("_")[0]
+
     domain_name = re.sub(r"(?<!^)(?=[A-Z])", "_", name_of_the_model).lower()
 
     start_path = os.path.normpath(os.path.join(full_path, "../.."))
@@ -163,14 +257,12 @@ def process_files_in_directory(
         query = fin.read()
         try:
             parsed = parser.parse(query)
-            rendered = renderer.render(parsed, full_path)
+            rendered = renderer.render(parsed, full_path, verb)
 
-            with buffer.write_block(
-                "def {}_{}(response_json: dict):".format(verb, domain_name)
-            ):
-                buffer.write("return {}".format(verb))
+            with buffer.write_block("def {}():".format(name_of_the_function)):
+                buffer.write("return {}, '{}'".format(verb, parsed.objects[0].name))
 
-            buffer.write(f"class {verb}(ModelHelper):")
+            buffer.write(f"class {verb}:")
             buffer.write("    " + rendered.replace("\n", "\n    "))
             click.secho("Success!", fg="bright_white")
         except AnonymousQueryError:
@@ -189,6 +281,8 @@ def process_files_in_directory(
 
         # Format the output file using Black
         format_with_black(output_file)
+
+    return bare_file_name, name_of_the_function
 
 
 @cli.command()
