@@ -107,10 +107,10 @@ def process_files_with_same_domain(
             name_of_the_model = parts[2]
         elif app_or_package == "packages":
             name_of_the_model = parts[1]
-
+            
         if name_of_the_model not in grouped_files[app_or_package]:
             grouped_files[app_or_package][name_of_the_model] = []
-
+            
         grouped_files[app_or_package][name_of_the_model].append(
             {
                 "full_path": filename,
@@ -123,10 +123,14 @@ def process_files_with_same_domain(
             }
         )
 
-    packages_data = {}
-    for key, items in grouped_files["packages"].items():
+    # key = Amazon, Shopify
+    # items = tüm domainler
+    # item = domain
+    # needle = domain ismi Product, ProductFeature
+    for key, items in grouped_files["packages"].items(): 
+        packages_data = {}
         for item in items:
-            needle = item["full_path"].split("/")[4]
+            needle = item["full_path"].split("/")[4] # domain ismi Product
 
             if needle not in packages_data:
                 packages_data[needle] = []

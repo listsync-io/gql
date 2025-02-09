@@ -13,7 +13,6 @@ from gql.query_parser import (
 
 from typing import Optional, Dict, Any
 
-
 class DataclassesRenderer:
 
     def __init__(self, schema: GraphQLSchema, config: Config):
@@ -32,7 +31,7 @@ class DataclassesRenderer:
         buffer.write("from dataclasses_json import dataclass_json")
         buffer.write("from gql.clients import Client, AsyncIOClient")
         buffer.write("from gql.renderer_dataclasses import DataclassesRenderer")
-        buffer.write("from app.facades import auth")
+        buffer.write("from masonite.facades import Auth")
         buffer.write("")
 
         if self.config.custom_header:
@@ -89,7 +88,7 @@ class DataclassesRenderer:
         self, parsed_query: ParsedQuery, buffer: CodeChunk, obj: ParsedObject
     ):
         class_parents = "" if not obj.parents else f'({", ".join(obj.parents)})'
-
+        
         buffer.write("@dataclass_json")
         buffer.write("@dataclass")
         with buffer.write_block(f"class {obj.name}{class_parents}:"):
@@ -109,26 +108,26 @@ class DataclassesRenderer:
                 buffer.write("pass")
 
         buffer.write("")
-
+        
     @staticmethod
     def simplify(response: Dict[str, Any], operation_name: str) -> Dict[str, Any]:
-        if "data" not in response or ("errors" in response and response["errors"]):
+        if 'data' not in response or ('errors' in response and response['errors']):
             return response  # Return as-is in case of errors or missing data
-
+        
         # if operation_name is store, make it insert
-        operation_name = operation_name.replace("store", "insert")
-        operation_name = operation_name.replace("destroy", "delete")
-
-        data = response["data"]
+        operation_name = operation_name.replace('store', 'insert')
+        operation_name = operation_name.replace('destroy', 'delete')
+        
+        data = response['data']
         base_key = operation_name
         item_key = f"{base_key}"
 
         if f"{item_key}_by_pk" in data:
             data = {**data, **data[f"{item_key}_by_pk"]}
             data.pop(f"{item_key}_by_pk")
-
+            
             return data
-
+        
         return data.get(item_key, [])
 
     @staticmethod
@@ -137,22 +136,20 @@ class DataclassesRenderer:
         Transforms a standard GraphQL response into a Relay-style response.
         Dynamically handles based on operation_name extracted from class name or passed explicitly.
         """
-        if "data" not in response or ("errors" in response and response["errors"]):
+        if 'data' not in response or ('errors' in response and response['errors']):
             return response  # Return as-is in case of errors or missing data
-
+        
         # if operation_name is store, make it insert
-        operation_name = operation_name.replace("store", "insert")
-        operation_name = operation_name.replace("destroy", "delete")
-
-        data = response["data"]
+        operation_name = operation_name.replace('store', 'insert')
+        operation_name = operation_name.replace('destroy', 'delete')
+        
+        data = response['data']
         base_key = operation_name  # Adjust this if you need to extract from class name or metadata
         item_key = f"{base_key}"  # Adjust according to your data structure, e.g., for `amazon_product` queries
         aggregate_key = f"{base_key}_aggregate"
-
-        total_count = (
-            data.get(aggregate_key, {}).get("aggregate", {}).get("count", None)
-        )
-
+        
+        total_count = data.get(aggregate_key, {}).get('aggregate', {}).get('count', None)
+        
         relay_response = {}
 
         if total_count is not None:
@@ -171,17 +168,17 @@ class DataclassesRenderer:
                 ]
                 relay_response["edges"] = edges
                 return relay_response
-
+        
         if f"{item_key}_by_pk" in data:
             data = {**data, **data[f"{item_key}_by_pk"]}
             data.pop(f"{item_key}_by_pk")
-
+        
         # if response contains more than one item, return as-is
         if len(data) > 1:
             return data
-
+        
         return data.get(item_key, [])
-
+    
     def __render_operation(
         self, parsed_query: ParsedQuery, buffer: CodeChunk, parsed_op: ParsedOperation
     ):
@@ -218,7 +215,7 @@ class DataclassesRenderer:
                 variables_dict_lines.append(
                     f"'{x.name}': {x.name} if {x.name} is not None else {defval}"
                 )
-
+                
             buffer.write("@classmethod")
             with buffer.write_block(
                 f"def execute(cls, {vars_args_str}on_before_callback: Callable[[Mapping[str, str], Mapping[str, str]], None] = None):"
@@ -231,23 +228,15 @@ class DataclassesRenderer:
                 )
                 buffer.write("data = cls.from_json(response_text).to_dict()")
 
-                buffer.write(
-                    "operation_name = cls.__name__.replace('find', '').replace('get', '')"
-                )
-                buffer.write(
-                    "singular_str = operation_name[:-1] if operation_name.endswith('s') else operation_name"
-                )
-                buffer.write(
-                    "snake_case_str = re.sub(r'(?<!^)(?=[A-Z])', '_', singular_str).lower()"
-                )
-
+                buffer.write("operation_name = cls.__name__.replace('find', '').replace('get', '')")
+                buffer.write("singular_str = operation_name[:-1] if operation_name.endswith('s') else operation_name")
+                buffer.write("snake_case_str = re.sub(r'(?<!^)(?=[A-Z])', '_', singular_str).lower()")
+                
                 buffer.write("authenticated_user = Auth.user()")
-                buffer.write(
-                    "return DataclassesRenderer.relayify(data, snake_case_str) if authenticated_user else DataclassesRenderer.simplify(data, snake_case_str)"
-                )
+                buffer.write("return DataclassesRenderer.relayify(data, snake_case_str) if authenticated_user else DataclassesRenderer.simplify(data, snake_case_str)")
 
             buffer.write("")
-
+            
             buffer.write("@classmethod")
             with buffer.write_block(
                 f"async def execute_async(cls, {vars_args_str}on_before_callback: Callable[[Mapping[str, str], Mapping[str, str]], None] = None):"
@@ -259,20 +248,12 @@ class DataclassesRenderer:
                 )
                 buffer.write("data = cls.from_json(response_text).to_dict()")
 
-                buffer.write(
-                    "operation_name = cls.__name__.replace('find', '').replace('get', '')"
-                )
-                buffer.write(
-                    "singular_str = operation_name[:-1] if operation_name.endswith('s') else operation_name"
-                )
-                buffer.write(
-                    "snake_case_str = re.sub(r'(?<!^)(?=[A-Z])', '_', singular_str).lower()"
-                )
-
+                buffer.write("operation_name = cls.__name__.replace('find', '').replace('get', '')")
+                buffer.write("singular_str = operation_name[:-1] if operation_name.endswith('s') else operation_name")
+                buffer.write("snake_case_str = re.sub(r'(?<!^)(?=[A-Z])', '_', singular_str).lower()")
+                
                 buffer.write("authenticated_user = Auth.user()")
-                buffer.write(
-                    "return DataclassesRenderer.relayify(data, snake_case_str) if authenticated_user else DataclassesRenderer.simplify(data, snake_case_str)"
-                )
+                buffer.write("return DataclassesRenderer.relayify(data, snake_case_str) if authenticated_user else DataclassesRenderer.simplify(data, snake_case_str)")
 
             buffer.write("")
             buffer.write("")
@@ -302,11 +283,8 @@ class DataclassesRenderer:
         if field.type == "DateTime":
             suffix = "= DATETIME_FIELD"
             field_type = "datetime"
-
-        if field_type in [
-            "List[user_amazon_association]",
-            "List[user_ebay_association]",
-        ]:
+        
+        if field_type in ["List[user_amazon_association]", "List[user_ebay_association]"]:
             suffix = f"= {field.default_value}"
 
         buffer.write(f"{field.name}: {field_type} {suffix}")

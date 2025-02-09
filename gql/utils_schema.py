@@ -6,7 +6,9 @@ from graphql import get_introspection_query, build_client_schema
 
 def load_introspection_from_server(url):
     query = get_introspection_query()
-    request = requests.post(url, json={'query': query})
+    request = requests.post(url, json={'query': query}, headers={
+        "x-hasura-admin-secret": ".Cemre94.",
+    })
     if request.status_code == 200:
         return request.json()['data']
 

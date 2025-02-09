@@ -2,7 +2,7 @@ from setuptools import setup
 
 setup(
     name="cfk_gql",
-    version="4.0",
+    version="6.0",
     packages=["gql", "gql.clients"],
     package_data={"": ["*"]},
     package_dir={"": "."},
